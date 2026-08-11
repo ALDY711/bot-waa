@@ -23,6 +23,7 @@ const { handleStatusHD } = require('./status');
 const { handleRVO } = require('./rvo');
 const { handleSticker, handleToImg } = require('./sticker');
 const { getBodyText, formatUptime } = require('./utils');
+const { saveChat, getHistory, formatHistory, cleanOldLogs } = require('./chatlog');
 
 const usePairingCode = process.argv.includes('--pairing-code');
 const startTime = Date.now();
@@ -109,6 +110,9 @@ async function startBot() {
       console.log(`\n${config.botName} berhasil terhubung ke WhatsApp!`);
       console.log(`Ketik command di chat "Chat Diri Sendiri", contoh: ${config.prefix}menu`);
       console.log(`RVO (Anti View Once): ${rvoEnabled ? 'AKTIF ✅' : 'NONAKTIF ❌'}\n`);
+
+      // Bersihkan log chat yang lebih tua dari 7 hari
+      cleanOldLogs(7);
     }
   });
 
@@ -120,19 +124,39 @@ async function startBot() {
       const msg = messages[0];
       if (!msg?.message) return;
 
+      // === CATAT RIWAYAT CHAT ===
+      try {
+        const SKIP_KEYS = ['messageContextInfo', 'senderKeyDistributionMessage', 'protocolMessage', 'senderKeyDistributionMessage'];
+        const msgType = Object.keys(msg.message).find((k) => !SKIP_KEYS.includes(k)) || 'unknown';
+        const MEDIA_TYPES = { imageMessage: 'image', videoMessage: 'video', audioMessage: 'audio', stickerMessage: 'sticker', documentMessage: 'document' };
+        const chatType = MEDIA_TYPES[msgType] || 'text';
+        const bodyText = getBodyText(msg);
+        const senderJid = msg.key.remoteJid;
+        const isGroup = senderJid?.endsWith('@g.us');
+        const participant = isGroup ? (msg.key.participant || senderJid) : senderJid;
+
+        saveChat({
+          from: msg.key.fromMe ? 'Saya' : (participant?.split('@')[0] || 'unknown'),
+          to: msg.key.fromMe ? (senderJid?.split('@')[0] || 'unknown') : 'Saya',
+          type: chatType,
+          body: bodyText || (chatType !== 'text' ? `[${chatType}]` : ''),
+          chatJid: senderJid,
+          fromMe: msg.key.fromMe || false,
+        });
+      } catch (logErr) {
+        // Jangan sampai error logging menghentikan bot
+        console.error('Error saat mencatat chat:', logErr);
+      }
+
       // === FITUR RVO (otomatis, berjalan untuk pesan dari orang lain) ===
       if (!msg.key.fromMe && rvoEnabled) {
         await handleRVO(sock, msg);
       }
 
       // === FILTER UTAMA (mode self-bot) ===
-      // Hanya proses pesan yang dikirim oleh pemilik bot
+      // Hanya proses pesan yang dikirim oleh pemilik bot (fromMe)
+      // Command bisa diketik di chat mana saja (pribadi, grup, atau self-chat)
       if (!msg.key.fromMe) return;
-
-      // Hanya proses di chat "Chat Diri Sendiri"
-      const selfJid = jidNormalizedUser(sock.user.id);
-      const chatJid = jidNormalizedUser(msg.key.remoteJid);
-      if (chatJid !== selfJid) return;
 
       // Parse body dari berbagai tipe pesan (termasuk caption gambar/video)
       const body = getBodyText(msg);
@@ -215,6 +239,22 @@ async function startBot() {
           break;
         }
 
+        // --- Riwayat Chat ---
+        case 'riwayat':
+        case 'history': {
+          const count = parseInt(text) || 20;
+          const logs = getHistory(Math.min(count, 50));
+          const formatted = formatHistory(logs);
+          await sock.sendMessage(jid, { text: formatted });
+          break;
+        }
+
+        case 'hapuslog': {
+          cleanOldLogs(0); // Hapus semua log
+          await sock.sendMessage(jid, { text: '🗑️ Semua riwayat chat telah dihapus.' });
+          break;
+        }
+
         // --- Menu ---
         case 'menu':
         case 'help': {
@@ -241,6 +281,10 @@ async function startBot() {
             `├ ${p}rvo on — Aktifkan RVO`,
             `├ ${p}rvo off — Nonaktifkan RVO`,
             `└ Status: ${rvoEnabled ? 'Aktif ✅' : 'Nonaktif ❌'}`,
+            ``,
+            `📋 *Riwayat Chat*`,
+            `├ ${p}riwayat [jumlah] — Lihat riwayat`,
+            `└ ${p}hapuslog — Hapus semua log`,
           ].join('\n');
 
           await sock.sendMessage(jid, { text: menuText });
