@@ -1,0 +1,22 @@
+{
+  "name": "wa-bot-pribadi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bot WhatsApp pribadi (khusus owner) dengan fitur .get dan .ssweb, dibangun dengan Baileys",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "pairing": "node index.js --pairing-code"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.23",
+    "axios": "^1.18.1",
+    "pino": "^10.3.1",
+    "puppeteer": "^24.43.1",
+    "qrcode": "^1.5.4"
+  }
+}
