@@ -1,5 +1,12 @@
 [phases.setup]
 nixPkgs = ["...", "chromium", "nss", "freetype", "harfbuzz", "ttf-freefont"]
 
+[phases.install]
+cmds = ["npm ci"]
+
+[variables]
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PUPPETEER_EXECUTABLE_PATH = "/nix/store/chromium/bin/chromium"
+
 [start]
 cmd = "npm run pairing"

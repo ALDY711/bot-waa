@@ -1,8 +1,10 @@
 // index.js
 // Bot WhatsApp pribadi (mode self-bot, jalan di nomor utama kamu sendiri).
 // Bot HANYA memproses command yang KAMU ketik sendiri di chat "Chat Diri Sendiri".
-// Pesan dari orang lain maupun dari grup tidak pernah diproses sebagai command.
+// Pesan dari orang lain maupun dari grup tidak pernah diproses sebagai command,
+// kecuali fitur RVO yang berjalan otomatis di background.
 
+const http = require('http');
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -19,12 +21,39 @@ const config = require('./config');
 const { handleGet, handleSsweb, closeBrowser } = require('./commands');
 const { handleStatusHD } = require('./status');
 const { handleRVO } = require('./rvo');
+const { handleSticker, handleToImg } = require('./sticker');
+const { getBodyText, formatUptime } = require('./utils');
 
 const usePairingCode = process.argv.includes('--pairing-code');
+const startTime = Date.now();
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 
+// =============================================
+// Health Check Server (agar Railway tidak kill)
+// =============================================
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  const uptime = formatUptime((Date.now() - startTime) / 1000);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    status: 'ok',
+    bot: config.botName,
+    uptime,
+  }));
+}).listen(PORT, () => {
+  console.log(`Health check server berjalan di port ${PORT}`);
+});
+
+// =============================================
+// Runtime state — bisa diubah lewat command
+// =============================================
+let rvoEnabled = config.rvoEnabled;
+
+// =============================================
+// Bot utama
+// =============================================
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(config.sessionDir);
   const { version } = await fetchLatestBaileysVersion();
@@ -33,21 +62,12 @@ async function startBot() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    // false: akun tidak ikut ditandai "online" hanya karena bot ini connect,
-    // dan HP kamu tetap dapat notifikasi WhatsApp seperti biasa.
     markOnlineOnConnect: false,
+    printQRInTerminal: false,
   });
 
-  // --- Login: QR code (default) atau pairing code (jalankan `npm run pairing`) ---
+  // --- Login: QR code (default) atau pairing code ---
   if (usePairingCode && !sock.authState.creds.registered) {
-    if (config.customPairingCode && config.customPairingCode.length !== 8) {
-      console.error(
-        `Kode pairing custom di config.js harus PERSIS 8 karakter (sekarang ${config.customPairingCode.length}). ` +
-        'Perbaiki nilainya, atau kosongkan jadi \'\' untuk pakai kode otomatis.'
-      );
-      process.exit(1);
-    }
-
     const phoneNumber = config.botNumber
       ? config.botNumber
       : (await ask('Masukkan nomor WhatsApp kamu (contoh: 628123456789): ')).trim();
@@ -56,15 +76,16 @@ async function startBot() {
       try {
         const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
         console.log(`\n==========================================`);
-        console.log(`Kode pairing kamu: ${code}`);
+        console.log(`  Kode pairing kamu: ${code}`);
         console.log(`==========================================`);
         console.log('Buka WhatsApp > Perangkat Tertaut > Tautkan dengan nomor telepon\n');
       } catch (err) {
         console.error('Gagal mendapatkan pairing code:', err.message || err);
       }
-    }, 4000); // Tunggu 4 detik agar koneksi Websocket Baileys stabil
+    }, 4000);
   }
 
+  // --- Connection events ---
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -78,40 +99,43 @@ async function startBot() {
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log(
         'Koneksi terputus.',
-        shouldReconnect ? 'Menyambung ulang...' : 'Logout — hapus folder session lalu jalankan ulang.'
+        shouldReconnect ? 'Menyambung ulang dalam 3 detik...' : 'Logout — hapus folder session lalu jalankan ulang.'
       );
-      if (shouldReconnect) startBot();
+      if (shouldReconnect) {
+        // Delay sebelum reconnect untuk menghindari spam
+        setTimeout(() => startBot(), 3000);
+      }
     } else if (connection === 'open') {
-      console.log('Bot berhasil terhubung ke WhatsApp!');
-      console.log(`Ketik command di chat "Chat Diri Sendiri" (chat dengan nomor kamu sendiri), contoh: ${config.prefix}menu`);
+      console.log(`\n${config.botName} berhasil terhubung ke WhatsApp!`);
+      console.log(`Ketik command di chat "Chat Diri Sendiri", contoh: ${config.prefix}menu`);
+      console.log(`RVO (Anti View Once): ${rvoEnabled ? 'AKTIF ✅' : 'NONAKTIF ❌'}\n`);
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
 
+  // --- Message handler ---
   sock.ev.on('messages.upsert', async ({ messages }) => {
     try {
       const msg = messages[0];
       if (!msg?.message) return;
 
-      // === FITUR RVO (Membaca pesan view once dari orang lain) ===
-      if (!msg.key.fromMe) {
+      // === FITUR RVO (otomatis, berjalan untuk pesan dari orang lain) ===
+      if (!msg.key.fromMe && rvoEnabled) {
         await handleRVO(sock, msg);
       }
 
-      // === FILTER UTAMA (mode self-bot di nomor utama) ===
-      // 1) Hanya proses pesan yang KAMU ketik sendiri dari HP/perangkat kamu — bukan dari orang lain.
-      //    (Pesan masuk dari orang lain/grup tetap "lewat" di sini, tapi baris ini langsung menghentikannya.)
+      // === FILTER UTAMA (mode self-bot) ===
+      // Hanya proses pesan yang dikirim oleh pemilik bot
       if (!msg.key.fromMe) return;
 
-      // 2) Hanya proses kalau diketik di chat "Chat Diri Sendiri" (chat dengan nomor kamu sendiri) —
-      //    bukan di chat/grup lain. Ini mencegah hasil command (misal screenshot) "nyasar" terkirim
-      //    ke lawan bicara kamu kalau kamu kebetulan mengetik ".sesuatu" di chat biasa.
+      // Hanya proses di chat "Chat Diri Sendiri"
       const selfJid = jidNormalizedUser(sock.user.id);
       const chatJid = jidNormalizedUser(msg.key.remoteJid);
       if (chatJid !== selfJid) return;
 
-      const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+      // Parse body dari berbagai tipe pesan (termasuk caption gambar/video)
+      const body = getBodyText(msg);
       if (!body.startsWith(config.prefix)) return;
 
       const [rawCmd, ...args] = body.slice(config.prefix.length).trim().split(/\s+/);
@@ -119,16 +143,113 @@ async function startBot() {
       const text = args.join(' ');
       const jid = msg.key.remoteJid;
 
-      if (cmd === 'get') {
-        await handleGet(sock, jid, text);
-      } else if (cmd === 'ssweb') {
-        await handleSsweb(sock, jid, text);
-      } else if (cmd === 'statushd') {
-        await handleStatusHD(sock, msg, text);
-      } else if (cmd === 'menu' || cmd === 'help') {
-        await sock.sendMessage(jid, {
-          text: `*Menu Bot Pribadi*\n\n${config.prefix}get <url>\n${config.prefix}ssweb <url>\n${config.prefix}statushd <caption (opsional)>`,
-        });
+      // === COMMAND ROUTER ===
+      switch (cmd) {
+        // --- Utilitas ---
+        case 'get':
+          await handleGet(sock, jid, text);
+          break;
+
+        case 'ssweb':
+          await handleSsweb(sock, jid, text);
+          break;
+
+        case 'ping': {
+          const uptime = formatUptime((Date.now() - startTime) / 1000);
+          const memUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+          await sock.sendMessage(jid, {
+            text: [
+              `🏓 *Pong!*`,
+              ``,
+              `⏱️ Uptime: ${uptime}`,
+              `💾 RAM: ${memUsage} MB`,
+              `📦 Node: ${process.version}`,
+              `🤖 Baileys: v6`,
+              `🔓 RVO: ${rvoEnabled ? 'Aktif ✅' : 'Nonaktif ❌'}`,
+            ].join('\n'),
+          });
+          break;
+        }
+
+        case 'owner':
+          await sock.sendMessage(jid, {
+            text: [
+              `👤 *Info Owner*`,
+              ``,
+              `Nama: ALDY`,
+              `Nomor: ${config.botNumber}`,
+              `Bot: ${config.botName} v2.0`,
+            ].join('\n'),
+          });
+          break;
+
+        // --- Media & Sticker ---
+        case 'sticker':
+        case 's':
+          await handleSticker(sock, msg);
+          break;
+
+        case 'toimg':
+          await handleToImg(sock, msg);
+          break;
+
+        // --- Status ---
+        case 'statushd':
+          await handleStatusHD(sock, msg, text);
+          break;
+
+        // --- RVO Toggle ---
+        case 'rvo': {
+          const param = text.toLowerCase();
+          if (param === 'on') {
+            rvoEnabled = true;
+            await sock.sendMessage(jid, { text: '✅ Anti View Once (RVO) *diaktifkan*.' });
+          } else if (param === 'off') {
+            rvoEnabled = false;
+            await sock.sendMessage(jid, { text: '❌ Anti View Once (RVO) *dinonaktifkan*.' });
+          } else {
+            await sock.sendMessage(jid, {
+              text: `🔓 RVO saat ini: ${rvoEnabled ? '*Aktif* ✅' : '*Nonaktif* ❌'}\n\nGunakan:\n${config.prefix}rvo on\n${config.prefix}rvo off`,
+            });
+          }
+          break;
+        }
+
+        // --- Menu ---
+        case 'menu':
+        case 'help': {
+          const p = config.prefix;
+          const menuText = [
+            `╔══════════════════╗`,
+            `║  *${config.botName}*  ║`,
+            `╚══════════════════╝`,
+            ``,
+            `📌 *Utilitas*`,
+            `├ ${p}ping — Cek bot hidup`,
+            `├ ${p}owner — Info owner`,
+            `├ ${p}get <url> — HTTP GET request`,
+            `└ ${p}ssweb <url> [full] — Screenshot web`,
+            ``,
+            `🎨 *Media & Sticker*`,
+            `├ ${p}sticker — Gambar → Sticker`,
+            `└ ${p}toimg — Sticker → Gambar`,
+            ``,
+            `📸 *Status*`,
+            `└ ${p}statushd [caption] — Upload status HD`,
+            ``,
+            `🔓 *Anti View Once*`,
+            `├ ${p}rvo on — Aktifkan RVO`,
+            `├ ${p}rvo off — Nonaktifkan RVO`,
+            `└ Status: ${rvoEnabled ? 'Aktif ✅' : 'Nonaktif ❌'}`,
+          ].join('\n');
+
+          await sock.sendMessage(jid, { text: menuText });
+          break;
+        }
+
+        default:
+          // Command tidak dikenali — abaikan saja
+          break;
       }
     } catch (err) {
       console.error('Error saat proses pesan:', err);
@@ -136,6 +257,9 @@ async function startBot() {
   });
 }
 
+// =============================================
+// Global error handlers & shutdown
+// =============================================
 process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
 process.on('SIGINT', async () => {
