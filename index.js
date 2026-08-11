@@ -52,9 +52,17 @@ async function startBot() {
       ? config.botNumber
       : (await ask('Masukkan nomor WhatsApp kamu (contoh: 628123456789): ')).trim();
 
-    const code = await sock.requestPairingCode(phoneNumber, config.customPairingCode || undefined);
-    console.log(`\nKode pairing kamu: ${code}`);
-    console.log('Buka WhatsApp > Perangkat Tertaut > Tautkan dengan nomor telepon\n');
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
+        console.log(`\n==========================================`);
+        console.log(`Kode pairing kamu: ${code}`);
+        console.log(`==========================================`);
+        console.log('Buka WhatsApp > Perangkat Tertaut > Tautkan dengan nomor telepon\n');
+      } catch (err) {
+        console.error('Gagal mendapatkan pairing code:', err.message || err);
+      }
+    }, 4000); // Tunggu 4 detik agar koneksi Websocket Baileys stabil
   }
 
   sock.ev.on('connection.update', async (update) => {
