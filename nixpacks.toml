@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["...", "chromium", "nss", "freetype", "harfbuzz", "ttf-freefont"]
+
+[start]
+cmd = "node index.js"
