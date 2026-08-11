@@ -47,10 +47,7 @@ http.createServer((req, res) => {
   console.log(`Health check server berjalan di port ${PORT}`);
 });
 
-// =============================================
-// Runtime state — bisa diubah lewat command
-// =============================================
-let rvoEnabled = config.rvoEnabled;
+
 
 // =============================================
 // Bot utama
@@ -148,10 +145,6 @@ async function startBot() {
         console.error('Error saat mencatat chat:', logErr);
       }
 
-      // === FITUR RVO (otomatis, berjalan untuk pesan dari orang lain) ===
-      if (!msg.key.fromMe && rvoEnabled) {
-        await handleRVO(sock, msg);
-      }
 
       // === FILTER UTAMA (mode self-bot) ===
       // Hanya proses pesan yang dikirim oleh pemilik bot (fromMe)
@@ -189,7 +182,6 @@ async function startBot() {
               `💾 RAM: ${memUsage} MB`,
               `📦 Node: ${process.version}`,
               `🤖 Baileys: v6`,
-              `🔓 RVO: ${rvoEnabled ? 'Aktif ✅' : 'Nonaktif ❌'}`,
             ].join('\n'),
           });
           break;
@@ -222,22 +214,10 @@ async function startBot() {
           await handleStatusHD(sock, msg, text);
           break;
 
-        // --- RVO Toggle ---
-        case 'rvo': {
-          const param = text.toLowerCase();
-          if (param === 'on') {
-            rvoEnabled = true;
-            await sock.sendMessage(jid, { text: '✅ Anti View Once (RVO) *diaktifkan*.' });
-          } else if (param === 'off') {
-            rvoEnabled = false;
-            await sock.sendMessage(jid, { text: '❌ Anti View Once (RVO) *dinonaktifkan*.' });
-          } else {
-            await sock.sendMessage(jid, {
-              text: `🔓 RVO saat ini: ${rvoEnabled ? '*Aktif* ✅' : '*Nonaktif* ❌'}\n\nGunakan:\n${config.prefix}rvo on\n${config.prefix}rvo off`,
-            });
-          }
+        // --- RVO (Manual) ---
+        case 'rvo':
+          await handleRVO(sock, msg);
           break;
-        }
 
         // --- Riwayat Chat ---
         case 'riwayat':
@@ -278,9 +258,7 @@ async function startBot() {
             `└ ${p}statushd [caption] — Upload status HD`,
             ``,
             `🔓 *Anti View Once*`,
-            `├ ${p}rvo on — Aktifkan RVO`,
-            `├ ${p}rvo off — Nonaktifkan RVO`,
-            `└ Status: ${rvoEnabled ? 'Aktif ✅' : 'Nonaktif ❌'}`,
+            `└ ${p}rvo — Reply pesan sekali lihat → simpan`,
             ``,
             `📋 *Riwayat Chat*`,
             `├ ${p}riwayat [jumlah] — Lihat riwayat`,

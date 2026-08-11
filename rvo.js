@@ -1,68 +1,101 @@
 // rvo.js
-// Anti View Once — otomatis menangkap pesan "sekali lihat" dan meneruskannya ke chat diri sendiri.
-// Mendukung: viewOnceMessage, viewOnceMessageV2, viewOnceMessageV2Extension
+// Anti View Once (Manual) — Reply pesan "sekali lihat" dengan .rvo
+// untuk menyimpannya ke Chat Diri Sendiri.
 
 const { downloadContentFromMessage, jidNormalizedUser } = require('@whiskeysockets/baileys');
-const config = require('./config');
 
 /**
- * Ekstrak inner message dari berbagai wrapper view once.
- * WhatsApp terus mengubah format ini, jadi kita coba semua kemungkinan.
+ * Ekstrak media dari view once message (termasuk dari quoted/reply).
  */
-function extractViewOnceContent(msg) {
+function extractViewOnceMedia(msg) {
   if (!msg.message) return null;
 
-  const m = msg.message;
-
-  // Key-key internal Baileys yang bukan tipe media
   const SKIP_KEYS = ['messageContextInfo', 'senderKeyDistributionMessage'];
-
-  // Cari key utama (skip internal keys)
-  const topKey = Object.keys(m).find((k) => !SKIP_KEYS.includes(k));
-  if (!topKey) return null;
-
-  // Cek apakah ini view once message
   const VIEW_ONCE_KEYS = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'];
-  
-  if (VIEW_ONCE_KEYS.includes(topKey)) {
-    // Struktur: msg.message.viewOnceMessageV2.message.imageMessage
-    const innerWrapper = m[topKey];
-    const innerMessage = innerWrapper?.message;
-    if (!innerMessage) return null;
+  const MEDIA_KEYS = ['imageMessage', 'videoMessage', 'audioMessage'];
 
-    const innerKey = Object.keys(innerMessage).find((k) => !SKIP_KEYS.includes(k));
-    if (!innerKey) return null;
+  // Cek di quoted message (pesan yang di-reply)
+  const contextInfo =
+    msg.message.extendedTextMessage?.contextInfo ||
+    msg.message.conversation?.contextInfo ||
+    null;
 
-    return {
-      wrapperType: topKey,
-      mediaType: innerKey,
-      mediaMessage: innerMessage[innerKey],
-    };
+  const quotedMsg = contextInfo?.quotedMessage;
+
+  if (quotedMsg) {
+    const quotedKey = Object.keys(quotedMsg).find((k) => !SKIP_KEYS.includes(k));
+
+    // Cek apakah quoted message adalah view once
+    if (quotedKey && VIEW_ONCE_KEYS.includes(quotedKey)) {
+      const innerMessage = quotedMsg[quotedKey]?.message;
+      if (innerMessage) {
+        const innerKey = Object.keys(innerMessage).find((k) => !SKIP_KEYS.includes(k));
+        if (innerKey && MEDIA_KEYS.includes(innerKey)) {
+          return {
+            mediaType: innerKey,
+            mediaMessage: innerMessage[innerKey],
+            source: 'quoted-viewonce',
+          };
+        }
+      }
+    }
+
+    // Cek apakah quoted message adalah media biasa dengan viewOnce flag
+    if (quotedKey && MEDIA_KEYS.includes(quotedKey) && quotedMsg[quotedKey]?.viewOnce) {
+      return {
+        mediaType: quotedKey,
+        mediaMessage: quotedMsg[quotedKey],
+        source: 'quoted-viewonce-flag',
+      };
+    }
   }
 
-  // Cek apakah media punya viewOnce flag (format alternatif di WA terbaru)
-  // Beberapa versi WA mengirim sebagai imageMessage biasa tapi dengan field viewOnce: true
-  const MEDIA_KEYS = ['imageMessage', 'videoMessage', 'audioMessage'];
-  if (MEDIA_KEYS.includes(topKey) && m[topKey]?.viewOnce) {
+  // Cek di pesan langsung (bukan reply)
+  const topKey = Object.keys(msg.message).find((k) => !SKIP_KEYS.includes(k));
+
+  if (topKey && VIEW_ONCE_KEYS.includes(topKey)) {
+    const innerMessage = msg.message[topKey]?.message;
+    if (innerMessage) {
+      const innerKey = Object.keys(innerMessage).find((k) => !SKIP_KEYS.includes(k));
+      if (innerKey && MEDIA_KEYS.includes(innerKey)) {
+        return {
+          mediaType: innerKey,
+          mediaMessage: innerMessage[innerKey],
+          source: 'direct-viewonce',
+        };
+      }
+    }
+  }
+
+  // Cek media biasa dengan viewOnce flag
+  if (topKey && MEDIA_KEYS.includes(topKey) && msg.message[topKey]?.viewOnce) {
     return {
-      wrapperType: 'viewOnce-flag',
       mediaType: topKey,
-      mediaMessage: m[topKey],
+      mediaMessage: msg.message[topKey],
+      source: 'direct-viewonce-flag',
     };
   }
 
   return null;
 }
 
+/**
+ * Handle command .rvo — reply pesan sekali lihat untuk disimpan ke Chat Diri Sendiri.
+ */
 async function handleRVO(sock, msg) {
-  // Cek toggle dari config / runtime
-  if (!config.rvoEnabled) return;
+  const jid = msg.key.remoteJid;
 
   try {
-    const content = extractViewOnceContent(msg);
-    if (!content) return; // Bukan view once, abaikan
+    const content = extractViewOnceMedia(msg);
 
-    const { wrapperType, mediaType, mediaMessage } = content;
+    if (!content) {
+      await sock.sendMessage(jid, {
+        text: '❌ Reply pesan *sekali lihat* (foto/video) dengan *.rvo* untuk menyimpannya.',
+      }, { quoted: msg });
+      return;
+    }
+
+    const { mediaType, mediaMessage, source } = content;
 
     const MEDIA_MAP = {
       imageMessage: 'image',
@@ -71,29 +104,22 @@ async function handleRVO(sock, msg) {
     };
 
     const downloadType = MEDIA_MAP[mediaType];
-    if (!downloadType) return;
-
-    const selfJid = jidNormalizedUser(sock.user.id);
-    const sender = msg.key.remoteJid;
-    const isGroup = sender?.endsWith('@g.us');
-    const participant = isGroup ? (msg.key.participant || sender) : sender;
-    const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-
-    // Cek apakah media punya data yang dibutuhkan untuk download
-    if (!mediaMessage.url && !mediaMessage.directPath && !mediaMessage.mediaKey) {
-      await sock.sendMessage(selfJid, {
-        text: [
-          '🔓 *View Once Terdeteksi* (gagal download)',
-          `📱 Dari: ${participant?.split('@')[0] || 'unknown'}`,
-          `💬 Sumber: ${isGroup ? 'Grup' : 'Private Chat'}`,
-          `📝 Caption: ${mediaMessage.caption || '(tidak ada)'}`,
-          `🕐 Waktu: ${now}`,
-          `⚠️ Media tidak bisa di-download (media key tidak tersedia)`,
-          `ℹ️ Wrapper: ${wrapperType}`,
-        ].join('\n'),
-      });
+    if (!downloadType) {
+      await sock.sendMessage(jid, {
+        text: '❌ Tipe media tidak didukung.',
+      }, { quoted: msg });
       return;
     }
+
+    // Cek apakah media punya data yang dibutuhkan
+    if (!mediaMessage.url && !mediaMessage.directPath && !mediaMessage.mediaKey) {
+      await sock.sendMessage(jid, {
+        text: '❌ Media tidak bisa di-download (data media tidak tersedia). Kemungkinan pesan sudah expired.',
+      }, { quoted: msg });
+      return;
+    }
+
+    await sock.sendMessage(jid, { text: '⏳ Sedang mengambil media...' }, { quoted: msg });
 
     // Download media
     let buffer;
@@ -105,41 +131,31 @@ async function handleRVO(sock, msg) {
       }
       buffer = Buffer.concat(chunks);
     } catch (dlErr) {
-      // Download gagal — beri tahu owner
-      await sock.sendMessage(selfJid, {
-        text: [
-          '🔓 *View Once Terdeteksi* (download gagal)',
-          `📱 Dari: ${participant?.split('@')[0] || 'unknown'}`,
-          `💬 Sumber: ${isGroup ? 'Grup' : 'Private Chat'}`,
-          `📝 Caption: ${mediaMessage.caption || '(tidak ada)'}`,
-          `🕐 Waktu: ${now}`,
-          `❌ Error: ${dlErr.message}`,
-          `ℹ️ Type: ${mediaType} | Wrapper: ${wrapperType}`,
-        ].join('\n'),
-      });
+      await sock.sendMessage(jid, {
+        text: `❌ Gagal download media: ${dlErr.message}`,
+      }, { quoted: msg });
       return;
     }
 
     if (!buffer || buffer.length === 0) {
-      await sock.sendMessage(selfJid, {
-        text: [
-          '🔓 *View Once Terdeteksi* (buffer kosong)',
-          `📱 Dari: ${participant?.split('@')[0] || 'unknown'}`,
-          `⚠️ Media berhasil di-download tapi hasilnya kosong.`,
-        ].join('\n'),
-      });
+      await sock.sendMessage(jid, {
+        text: '❌ Media berhasil di-download tapi hasilnya kosong.',
+      }, { quoted: msg });
       return;
     }
 
+    // Kirim ke Chat Diri Sendiri
+    const selfJid = jidNormalizedUser(sock.user.id);
+    const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+
+    const isGroup = jid?.endsWith('@g.us');
     const captionInfo = [
-      '🔓 *Anti View Once (RVO)*',
-      `📱 Dari: ${participant?.split('@')[0] || 'unknown'}`,
-      `💬 Sumber: ${isGroup ? 'Grup' : 'Private Chat'}`,
+      '🔓 *View Once Disimpan*',
+      `📱 Dari chat: ${isGroup ? 'Grup' : 'Private'} (${jid?.split('@')[0]})`,
       `📝 Caption: ${mediaMessage.caption || '(tidak ada)'}`,
       `🕐 Waktu: ${now}`,
     ].join('\n');
 
-    // Kirim ke chat diri sendiri
     if (mediaType === 'imageMessage') {
       await sock.sendMessage(selfJid, { image: buffer, caption: captionInfo });
     } else if (mediaType === 'videoMessage') {
@@ -153,16 +169,16 @@ async function handleRVO(sock, msg) {
       await sock.sendMessage(selfJid, { text: captionInfo });
     }
 
-    console.log(`RVO berhasil: ${downloadType} dari ${participant?.split('@')[0]} (${wrapperType})`);
+    await sock.sendMessage(jid, {
+      text: '✅ Media sekali lihat berhasil disimpan! Cek di *Chat Diri Sendiri*.',
+    }, { quoted: msg });
+
+    console.log(`RVO berhasil: ${downloadType} dari ${jid?.split('@')[0]} (${source})`);
   } catch (err) {
     console.error('Error saat memproses RVO:', err);
-    // Kirim notifikasi error ke diri sendiri agar owner tahu
-    try {
-      const selfJid = jidNormalizedUser(sock.user.id);
-      await sock.sendMessage(selfJid, {
-        text: `⚠️ *RVO Error*\n${err.message}\n\nStack: ${err.stack?.substring(0, 300)}`,
-      });
-    } catch { /* abaikan error saat mengirim notifikasi error */ }
+    await sock.sendMessage(jid, {
+      text: `❌ Terjadi error: ${err.message}`,
+    }, { quoted: msg });
   }
 }
 
