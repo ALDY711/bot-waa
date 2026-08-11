@@ -49,9 +49,13 @@ async function handleGet(sock, jid, url) {
         const response = await axios.get(url, { timeout: 15000 });
         const data = typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : String(response.data);
 
-        // WhatsApp punya batas karakter ~65.000, tapi kita batasi 4000 agar tetap nyaman dibaca
-        if (data.length > 4000) {
-            await sock.sendMessage(jid, { text: data.substring(0, 4000) + '\n\n... _(terpotong, data terlalu panjang)_' });
+        // Jika teks sangat panjang, bagi menjadi beberapa pesan agar tidak terpotong
+        const CHUNK_SIZE = 4000;
+        if (data.length > CHUNK_SIZE) {
+            for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+                const chunk = data.slice(i, i + CHUNK_SIZE);
+                await sock.sendMessage(jid, { text: chunk });
+            }
         } else {
             await sock.sendMessage(jid, { text: data });
         }
