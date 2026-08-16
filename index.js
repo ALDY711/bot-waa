@@ -19,6 +19,7 @@ const readline = require('readline');
 
 const config = require('./config');
 const { handleGet, handleSsweb, closeBrowser } = require('./commands');
+const { handleTiktok } = require('./downloader');
 const { handleStatusHD } = require('./status');
 const { handleRVO } = require('./rvo');
 const { handleSticker, handleToImg } = require('./sticker');
@@ -172,6 +173,14 @@ async function startBot() {
           await handleSsweb(sock, jid, text);
           break;
 
+        case 'tt':
+          await handleTiktok(sock, jid, text, false);
+          break;
+
+        case 'tthd':
+          await handleTiktok(sock, jid, text, true);
+          break;
+
         case 'ping': {
           const uptime = formatUptime((Date.now() - startTime) / 1000);
           const memUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
@@ -250,6 +259,10 @@ async function startBot() {
             `├ ${p}owner — Info owner`,
             `├ ${p}get <url> — HTTP GET request`,
             `└ ${p}ssweb <url> [full] — Screenshot web`,
+            ``,
+            `📥 *Downloader*`,
+            `├ ${p}tt <url> — Download TikTok Biasa`,
+            `└ ${p}tthd <url> — Download TikTok HD`,
             ``,
             `🎨 *Media & Sticker*`,
             `├ ${p}sticker — Gambar → Sticker`,
