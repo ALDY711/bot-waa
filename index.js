@@ -23,6 +23,7 @@ const { handleTiktok } = require('./downloader');
 const { handleStatusHD } = require('./status');
 const { handleRVO } = require('./rvo');
 const { handleSticker, handleToImg } = require('./sticker');
+const { handleAddCatalog } = require('./catalog');
 const { getBodyText, formatUptime } = require('./utils');
 const { saveChat, getHistory, formatHistory, cleanOldLogs } = require('./chatlog');
 
@@ -164,6 +165,11 @@ async function startBot() {
 
       // === COMMAND ROUTER ===
       switch (cmd) {
+        // --- Katalog ---
+        case 'addkatalog':
+          await handleAddCatalog(sock, msg, text);
+          break;
+
         // --- Utilitas ---
         case 'get':
           await handleGet(sock, jid, text);
@@ -273,6 +279,9 @@ async function startBot() {
             ``,
             `🔓 *Anti View Once*`,
             `└ ${p}rvo — Reply pesan sekali lihat → simpan`,
+            ``,
+            `🛍️ *Katalog WA Business*`,
+            `└ ${p}addkatalog <nama> <harga> <deskripsi> — Upload produk (sambil kirim/reply gambar)`,
             ``,
             `📋 *Riwayat Chat*`,
             `├ ${p}riwayat [jumlah] — Lihat riwayat`,
