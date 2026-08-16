@@ -67,16 +67,14 @@ async function handleAddCatalog(sock, msg, text) {
     fs.writeFileSync(tmpFile, media.buffer);
 
     try {
-      // Siapkan payload
-      // Penting: Di API WA, harga dikali 1000.
       const productData = {
           name: name,
           description: description,
           price: price * 1000, 
           currency: 'IDR',
-          originCountryCode: 'ID', // Kode negara WA Business saat ini
+          originCountryCode: undefined, // Bypass error negara
           isHidden: false,
-          images: [{ url: tmpFile }]
+          images: [ media.buffer ] // Langsung lempar buffer, Baileys akan mengubahnya jadi stream
       };
 
       // Eksekusi Baileys API
@@ -88,8 +86,19 @@ async function handleAddCatalog(sock, msg, text) {
                          `💰 *Harga:* Rp ${price.toLocaleString('id-ID')}\n` +
                          `📝 *Deskripsi:* ${description}\n\n` +
                          `*ID Katalog:* ${result?.id || 'OK'}`;
-      
       await sock.sendMessage(jid, { text: successMsg }, { quoted: msg });
+    } catch (apiError) {
+      // Jika terjadi error dari API WA (misalnya nomor bukan WA Business)
+      console.error('Error dari API WA:', apiError);
+      
+      // Jika errornya Cannot read properties of undefined (reading 'attrs')
+      // Itu berarti API mereturn success/result, tapi isinya pesan error (tidak ada node 'product').
+      // Paling sering terjadi karena NOMOR YANG DIGUNAKAN BUKAN WHATSAPP BUSINESS.
+      let hint = apiError.message;
+      if (hint.includes('attrs')) {
+        hint = 'Gagal memproses data katalog dari WhatsApp. Pastikan nomor yang ditautkan di bot ini adalah akun WhatsApp Business resmi (bukan WA biasa).';
+      }
+      throw new Error(hint);
     } finally {
       // Hapus file temporary agar tidak memenuhi storage
       if (fs.existsSync(tmpFile)) {
