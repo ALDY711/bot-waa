@@ -72,7 +72,7 @@ async function handleAddCatalog(sock, msg, text) {
           description: description,
           price: price * 1000, 
           currency: 'IDR',
-          originCountryCode: undefined, // Bypass error negara
+          originCountryCode: 'ID', // Wajib diisi sesuai screenshot (Negara asal)
           isHidden: false,
           images: [ media.buffer ] // Langsung lempar buffer, Baileys akan mengubahnya jadi stream
       };
@@ -112,4 +112,45 @@ async function handleAddCatalog(sock, msg, text) {
   }
 }
 
-module.exports = { handleAddCatalog };
+async function handleGetCatalog(sock, msg) {
+  const jid = msg.key.remoteJid;
+  try {
+    await sock.sendMessage(jid, { text: '⏳ Mengambil data katalog...' }, { quoted: msg });
+    
+    // Ambil katalog dari nomor bot sendiri
+    const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+    // RAW Query ke WhatsApp untuk mendapatkan data mentah katalog
+    const result = await sock.query({
+        tag: 'iq',
+        attrs: {
+            to: 's.whatsapp.net',
+            type: 'get',
+            xmlns: 'w:biz:catalog'
+        },
+        content: [
+            {
+                tag: 'product_catalog',
+                attrs: {
+                    jid: botJid,
+                    allow_shop_source: 'true'
+                },
+                content: [
+                    { tag: 'limit', attrs: {}, content: Buffer.from('10') },
+                    { tag: 'width', attrs: {}, content: Buffer.from('100') },
+                    { tag: 'height', attrs: {}, content: Buffer.from('100') }
+                ]
+            }
+        ]
+    });
+    
+    console.log('=== DATA RAW IQ DARI WA ===');
+    console.log(JSON.stringify(result, null, 2));
+    
+    await sock.sendMessage(jid, { text: `✅ Berhasil hit API. Cek terminal untuk melihat JSON mentahnya.` }, { quoted: msg });
+  } catch (err) {
+    console.error('Get Katalog Error:', err);
+    await sock.sendMessage(jid, { text: `❌ Gagal mengambil katalog: ${err.message}` }, { quoted: msg });
+  }
+}
+
+module.exports = { handleAddCatalog, handleGetCatalog };

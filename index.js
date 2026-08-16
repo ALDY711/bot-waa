@@ -23,7 +23,7 @@ const { handleTiktok } = require('./downloader');
 const { handleStatusHD } = require('./status');
 const { handleRVO } = require('./rvo');
 const { handleSticker, handleToImg } = require('./sticker');
-const { handleAddCatalog } = require('./catalog');
+const { handleAddCatalog, handleGetCatalog } = require('./catalog');
 const { getBodyText, formatUptime } = require('./utils');
 const { saveChat, getHistory, formatHistory, cleanOldLogs } = require('./chatlog');
 
@@ -143,6 +143,12 @@ async function startBot() {
           chatJid: senderJid,
           fromMe: msg.key.fromMe || false,
         });
+        
+        // --- PRINT CHAT KE TERMINAL (CMD) ---
+        const senderName = msg.key.fromMe ? 'SAYA' : (participant?.split('@')[0] || 'unknown');
+        const textToPrint = bodyText || (chatType !== 'text' ? `[${chatType}]` : '');
+        console.log(`[CHAT] ${senderName}: ${textToPrint}`);
+        
       } catch (logErr) {
         // Jangan sampai error logging menghentikan bot
         console.error('Error saat mencatat chat:', logErr);
@@ -166,6 +172,10 @@ async function startBot() {
       // === COMMAND ROUTER ===
       switch (cmd) {
         // --- Katalog ---
+        case 'getkatalog':
+          await handleGetCatalog(sock, msg);
+          break;
+
         case 'addkatalog':
           await handleAddCatalog(sock, msg, text);
           break;
@@ -280,8 +290,9 @@ async function startBot() {
             `🔓 *Anti View Once*`,
             `└ ${p}rvo — Reply pesan sekali lihat → simpan`,
             ``,
-            `🛍️ *Katalog WA Business*`,
-            `└ ${p}addkatalog <nama> <harga> <deskripsi> — Upload produk (sambil kirim/reply gambar)`,
+            `🛍️ *KATALOG BISNIS (Khusus WA Business)*`,
+            `├ ${p}addkatalog <Nama> <Harga> <Deskripsi> — Tambah produk`,
+            `└ ${p}getkatalog — Mengambil data katalog`,
             ``,
             `📋 *Riwayat Chat*`,
             `├ ${p}riwayat [jumlah] — Lihat riwayat`,
