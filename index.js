@@ -107,7 +107,7 @@ async function startBot() {
     } else if (connection === 'open') {
       console.log(`\n${config.botName} berhasil terhubung ke WhatsApp!`);
       console.log(`Ketik command di chat "Chat Diri Sendiri", contoh: ${config.prefix}menu`);
-      console.log(`RVO (Anti View Once): ${rvoEnabled ? 'AKTIF ✅' : 'NONAKTIF ❌'}\n`);
+      console.log(`RVO (Anti View Once): ${config.rvoEnabled ? 'AKTIF ✅' : 'NONAKTIF ❌'}\n`);
 
       // Bersihkan log chat yang lebih tua dari 7 hari
       cleanOldLogs(7);
